@@ -1,0 +1,28 @@
+<!-- register echonet-lite node -->
+<script type="text/javascript">
+    RED.nodes.registerType('echonet-lite', {
+        category: 'Echonet Lite',
+        color: '#66c7f4',
+        defaults: {
+            name: { value: "" },
+            location: { value: "" }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-info",
+        label: function () {
+            return this.name || "echonet-lite";
+        }
+    });
+</script>
+<!-- Define setting UI for echonet-lite node -->
+<script type="text/html" data-template-name="echonet-lite">
+    <div class="form-row">
+        <label><i class="fa fa-tag"></i> Name: </label>
+        <input type="text" id="node-input-name"/>
+    </div>
+    <div class="form-row">
+        <label><i class="fa fa-globe"></i> Location: </label>
+        <input type="text" id="node-input-location"/>
+    </div>
+</script>
