@@ -1,3 +1,5 @@
+var dgram = require("dgram");
+
 module.exports = function (RED) {
   var EchonetLite = require("node-echonet-lite");
   var el = new EchonetLite({ type: "lan" });
@@ -8,69 +10,55 @@ module.exports = function (RED) {
     node.location = config.location;
 
     el.init((err) => {
-      if (err) {
-        node.status({ fill: "red", shape: "ring", text: "Error" });
-      } else {
-        node.status({ fill: "green", shape: "dot", text: "Ready" });
-      }
+      node.status(err ? { fill: "red", shape: "ring", text: "Error" } : { fill: "green", shape: "dot", text: "Ready" });
     });
 
     node.on("input", function (msg) {
       var address = node.location || msg.ip || (msg.payload && msg.payload.ip);
-      if (!address) {
-        node.error("IPアドレスが見つかりません", msg);
-        return;
-      }
+      if (!address) return;
 
-      // 1. オブジェクト(EOJ)の決定
-      var eoj = [0x02, 0x79, 0x01]; // デフォルト: 太陽光
-      if (msg.object && Array.isArray(msg.object)) {
-        eoj = msg.object;
-      }
+      var deoj = msg.object || [0x02, 0x7D, 0x01]; // 蓄電池
+      var epc = parseInt(String(msg.epc || "DA").replace("0x", ""), 16);
 
-      // 2. プロパティ(EPC)の決定
-      var epc = 0xE0; // デフォルト: 発電量
-      if (msg.epc) {
-        if (typeof msg.epc === "string") {
-          // "E4" や "0xE4" を数値に変換
-          var cleanEpc = msg.epc.replace("0x", "");
-          epc = parseInt(cleanEpc, 16);
-        } else if (typeof msg.epc === "number") {
-          epc = msg.epc;
-        }
-      }
+      // --- 書き込み (SET) ---
+      if (msg.set_value !== undefined) {
+        var edt = parseInt(String(msg.set_value).replace("0x", ""), 16);
+        
+        // 標準パケット構築 (SetC: 0x61)
+        var packet = Buffer.from([
+          0x10, 0x81, 0x00, 0x01, 
+          0x05, 0xFF, 0x01, // SEOJ: 管理装置
+          deoj[0], deoj[1], deoj[2], 
+          0x61, 0x01, epc, 0x01, edt
+        ]);
 
-      // EPCが有効な数値か最終チェック
-      if (isNaN(epc) || epc < 0 || epc > 255) {
-        node.error("不正なEPCコードです: " + msg.epc);
-        node.status({ fill: "red", shape: "ring", text: "Invalid EPC" });
-        return;
-      }
+        var client = dgram.createSocket("udp4");
+        client.send(packet, 3610, address, (err) => {
+          node.status(err ? { fill: "red", shape: "dot", text: "Error" } : { fill: "green", shape: "dot", text: "Sent" });
+          setTimeout(() => { node.status({ fill: "green", shape: "dot", text: "Ready" }); }, 2000);
+          client.close();
+        });
 
-      node.status({ fill: "yellow", shape: "dot", text: "Sending..." });
+        msg.payload = "OK";
+        node.send(msg);
 
-      // 3. データ取得実行
-      el.getPropertyValue(address, eoj, epc, (err, res) => {
-        if (err) {
-          node.error("ECHONET Lite Error: " + err.toString(), msg);
-          node.status({ fill: "red", shape: "dot", text: "Timeout" });
-        } else {
+      } else {
+        // --- 読み取り (GET) ---
+        node.status({ fill: "yellow", shape: "dot", text: "Reading..." });
+        el.getPropertyValue(address, deoj, epc, (err, res) => {
           var val = 0;
-          if (res.message && res.message.prop) {
-            res.message.prop.forEach(function(p) {
+          if (res && res.message && res.message.prop) {
+            res.message.prop.forEach(p => {
               if (p.epc === epc && p.buffer) {
-                // バイト配列を数値に変換
-                for (var i = 0; i < p.buffer.length; i++) {
-                  val = val * 256 + p.buffer[i];
-                }
+                for (var i = 0; i < p.buffer.length; i++) { val = val * 256 + p.buffer[i]; }
               }
             });
           }
           msg.payload = val;
           node.send(msg);
           node.status({ fill: "blue", shape: "dot", text: "Val: " + val });
-        }
-      });
+        });
+      }
     });
   }
   RED.nodes.registerType("echonet-lite", EchonetLiteNode, {});

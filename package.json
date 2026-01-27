@@ -1,9 +1,16 @@
 {
-  "name": "node-red-contrib-echonetlite",
-  "version": "1.0.0",
-  "description": "echonet lite example",
+  "name": "node-red-contrib-echonet-lite-plus",
+  "version": "2.0.0",
+  "description": "ECHONET Lite controller for Node-RED",
   "main": "echonet-lite.js",
-  "author": "y60yu1ii",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "node-red",
+    "echonet-lite",
+  ],
+  "author": "Futoshi-SSK",
   "license": "MIT",
   "node-red": {
     "nodes": {
@@ -11,7 +18,6 @@
     }
   },
   "dependencies": {
-    "node-echonet-lite": "^0.6.0",
-    "punycode": "^2.3.1"
+    "node-echonet-lite": "^0.2.0"
   }
 }
