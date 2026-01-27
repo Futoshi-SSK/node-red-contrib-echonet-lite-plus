@@ -1,18 +1,32 @@
-# node-red-contrib-echonet-lite-plus
-A dynamic and universal ECHONET Lite node for Node-RED. Supports arbitrary EOJ and EPC selection for Solar Power, Battery Storage, and other ECHONET Lite devices.
+node-red-contrib-echonet-lite-plus
 
-How to Use
-You can retrieve data from any ECHONET Lite device by simply passing the target Object and Property through a message.
+An ECHONET Lite controller for Node-RED, designed to bypass common library limitations over smart home devices.
 
-1. Configure the Node
-   Double-click the node and enter the IP Address of your ECHONET Lite device (e.g., your solar/battery remote controller).
 
-2. Send a Command
-   Use a change node or inject node to set the following properties:
-   
-   Target Data    msg.object (JSON Array)    msg.epc (String)    Description
-   Solar Power    [2, 121, 1]                E0                  Instantaneous solar generation (Watts)
-   Battery SoC    [2, 125, 1]                E4                  Battery State of Charge (%)
+Features
 
-3. Receive the Result
-   The node automatically parses the ECHONET Lite byte buffer and returns a number in msg.payload.For Solar: 850 (means 850W)For Battery: 98 (means 98%)
+Dictionary-Free Control: Unlike standard libraries that restrict you to pre-defined property codes, this version allows you to send any EPC (Property Code) and EDT (Data) directly. This is essential for controlling manufacturer-specific or undocumented properties.
+
+High Compatibility (SEOJ: 05FF01): The Source Object ID is fixed to 05FF01 (Management Software/HEMS), which ensures higher acceptance rates from security-strict devices like storage batteries and large appliances.
+
+
+Installation
+
+Run the following command in your Node-RED user directory (typically ~/.node-red):
+Bash
+npm install node-red-contrib-echonet-lite-plus
+
+
+Usage
+
+This node treats all input values as Hexadecimal Strings.
+
+Write Operation (SET)
+To write a value, set msg.set_value in your flow.
+- msg.object: [2, 125, 1]
+- msg.epc: The Property Code (e.g., DA) *Hexadecimal
+- msg.set_value: The value to write (e.g., "42") *Hexadecimal
+
+Read Operation (GET)
+To read a value, simply omit msg.set_value. The node will return the parsed value in msg.payload.
+
