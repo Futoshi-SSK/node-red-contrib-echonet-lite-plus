@@ -19,13 +19,11 @@ npm install node-red-contrib-echonet-lite-plus
 
 Usage
 
-This node treats all input values as Hexadecimal Strings.
-
 Write Operation (SET)
 To write a value, set msg.set_value in your flow.
 - msg.object: [2, 125, 1]
 - msg.epc: The Property Code (e.g., DA) *Hexadecimal
-- msg.set_value: The value to write (e.g., "42") *Hexadecimal
+- msg.set_value: The value to write (e.g., 42) *Hexadecimal
 
 Read Operation (GET)
 To read a value, simply omit msg.set_value. The node will return the parsed value in msg.payload.
