@@ -1,59 +1,78 @@
+const dgram = require('dgram');
+
 module.exports = function(RED) {
     "use strict";
-    const echonet = require('node-echonet-lite');
 
     function EchonetLiteNode(n) {
         RED.nodes.createNode(this, n);
         const node = this;
-
-        // 設定からIPアドレスを特定（locationを優先候補に追加）
-        this.ip = n.ip || n.host || n.address || n.location; 
-        
-        const el = new echonet({ 'lang': 'ja', 'type': 'lan' });
+        this.ip = n.ip || n.host || n.address || n.location;
 
         node.on('input', function(msg) {
             const address = msg.ip || node.ip;
-            
             if (!address) {
-                node.error("IP Address is required. (n.location: " + n.location + ")");
-                node.status({fill:"red", shape:"ring", text:"IP missing"});
+                node.error("IP Address is required.");
                 return;
             }
 
-            const deoj = msg.object || [0x02, 0x7D, 0x01];
-            const epc = parseInt(msg.epc, 16);
-            let edt = null;
-            let esv = 0x62;
+            // --- パケット要素の準備 ---
+            const tid = Math.floor(Math.random() * 65535); // トランザクションID
+            const seoj = [0x05, 0xFF, 0x01];              // 管理ソフトクラス
+            const deoj = msg.object || [0x02, 0x7D, 0x01]; // デフォルト蓄電池
+            const epc = parseInt(msg.epc, 16);             // プロパティ名
+            
+            let esv = 0x62; // Get (読み取り)
+            let edt = Buffer.alloc(0);
 
+            // 書き込み値がある場合
             if (msg.set_value !== undefined && msg.set_value !== null) {
-                esv = 0x61;
-                const hexStr = msg.set_value.toString();
-                edt = [];
-                for (let i = 0; i < hexStr.length; i += 2) {
-                    edt.push(parseInt(hexStr.substr(i, 2), 16));
-                }
+                esv = 0x61; // SetC (書き込み)
+                edt = Buffer.from(msg.set_value.toString(), 'hex');
             }
 
-            const prop = { 'epc': epc, 'edt': edt };
+            // --- ECHONET Lite 電文（バイナリ）の組み立て ---
+            const buf = Buffer.concat([
+                Buffer.from([0x10, 0x81]),           // EHD (ECHONET Lite ヘッダー)
+                Buffer.from([(tid >> 8) & 0xFF, tid & 0xFF]), // TID
+                Buffer.from(seoj),                   // SEOJ
+                Buffer.from(deoj),                   // DEOJ
+                Buffer.from([esv, 0x01, epc]),       // ESV, OPC (1), EPC
+                Buffer.from([edt.length]),           // PDC (データの長さ)
+                edt                                  // EDT
+            ]);
 
-            el.send(address, [0x05, 0xFF, 0x01], deoj, esv, [prop], (err, res) => {
-                if (err) {
-                    node.error("ECHONET Lite Send Error: " + err.message);
-                    node.status({fill:"red", shape:"ring", text:"error"});
-                    return;
-                }
+            // --- UDPで直接送信 ---
+            const client = dgram.createSocket('udp4');
+            
+            // 応答待ち受け（タイムアウト設定）
+            const timeout = setTimeout(() => {
+                client.close();
+                node.status({fill:"yellow", shape:"ring", text:"timeout"});
+            }, 3000);
 
-                if (res && res.detail && res.detail.property && res.detail.property.length > 0) {
-                    const resultProp = res.detail.property[0];
-                    msg.payload = Buffer.from(resultProp.edt).toString('hex').toUpperCase();
-                    node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
-                    node.send(msg);
+            client.on('message', (response, rinfo) => {
+                // 自分宛の応答かチェック（TIDの照合）
+                if (response[2] === ((tid >> 8) & 0xFF) && response[3] === (tid & 0xFF)) {
+                    clearTimeout(timeout);
+                    client.close();
+
+                    // 応答ESVが正しければデータを抽出
+                    // (0x71: SetRes, 0x72: GetRes)
+                    if (response[10] === 0x71 || response[10] === 0x72) {
+                        const pdc = response[13];
+                        msg.payload = response.slice(14, 14 + pdc).toString('hex').toUpperCase();
+                        node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
+                        node.send(msg);
+                    }
                 }
             });
-        });
 
-        node.on('close', function() {
-            if (el) el.close();
+            client.send(buf, 0, buf.length, 3610, address, (err) => {
+                if (err) {
+                    node.error("UDP Send Error: " + err.message);
+                    client.close();
+                }
+            });
         });
     }
 
