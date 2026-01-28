@@ -5,59 +5,43 @@ module.exports = function(RED) {
     function EchonetLiteNode(n) {
         RED.nodes.createNode(this, n);
         const node = this;
-        // プロパティ名は環境によって location だったり ip だったりするため両対応
         this.ip = n.ip || n.host || n.location || n.address; 
         const el = new echonet({ 'lang': 'ja', 'type': 'lan' });
 
         node.on('input', function(msg) {
             const address = msg.ip || node.ip;
-            const deoj = msg.object || [0x02, 0x7D, 0x01];
-            const epc = msg.epc || "E2";
-            const epc_num = parseInt(epc, 16);
+            const deoj = msg.object || [0x02, 0x7D, 0x01]; // デフォルト蓄電池クラス
+            const epc_num = parseInt(msg.epc || "E2", 16);
 
-            const handleResponse = (err, res, source) => {
+            node.status({fill:"blue", shape:"dot", text:"sending..."});
+
+            let esv = 0x62; // Get (取得)
+            let props = [{ 'epc': epc_num }]; // Get時は 'edt' キーを含めない
+
+            if (msg.set_value !== undefined && msg.set_value !== null) {
+                esv = 0x61; // SetC (書き込み)
+                props[0].edt = Buffer.from(msg.set_value.toString(), 'hex');
+            }
+
+            // 辞書チェックをバイパスするため el.send に一本化
+            el.send(address, [0x05, 0xFF, 0x01], deoj, esv, props, (err, res) => {
                 if (err) {
-                    node.status({fill:"red", shape:"ring", text: source + " error"});
+                    node.status({fill:"red", shape:"ring", text:"comm error"});
                     msg.payload = "TIMEOUT_ERROR";
                 } else {
                     try {
-                        // ライブラリのメソッドによってレスポンス構造が違うのを吸収
-                        const rawData = res.message ? res.message.data.edt : res.detail.property[0].edt;
+                        // レスポンスから EDT を直接抽出
+                        const rawData = res.detail.property[0].edt;
                         msg.payload = Buffer.from(rawData).toString('hex').toUpperCase();
-                        node.status({fill:"green", shape:"dot", text:"OK(" + source + "): " + msg.payload});
+                        node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
                     } catch (e) {
-                        msg.payload = "DECODE_ERROR";
+                        // Set時など応答データがない場合のフォールバック
+                        msg.payload = "SUCCESS"; 
+                        node.status({fill:"green", shape:"dot", text:"OK"});
                     }
                 }
                 node.send(msg);
-            };
-
-            // --- A. 設定系 (SetC: 0x61) ---
-            if (msg.set_value !== undefined && msg.set_value !== null) {
-                node.status({fill:"blue", shape:"dot", text:"setting..."});
-                const props = [{ 'epc': epc_num, 'edt': Buffer.from(msg.set_value.toString(), 'hex') }];
-                el.send(address, [0x05, 0xFF, 0x01], deoj, 0x61, props, (err, res) => {
-                    handleResponse(err, res, "set");
-                });
-            } 
-            // --- B. 照会系 (Get: 0x62) ---
-            else {
-                node.status({fill:"blue", shape:"dot", text:"getting..."});
-                // 1. まずは標準の方法で試す
-                el.getPropertyValue(address, deoj, epc, (err, res) => {
-                    if (err && err.message.includes("not supported")) {
-                        // 2. 「辞書にない」と言われたら、辞書を無視する el.send で強制実行
-                        node.status({fill:"yellow", shape:"dot", text:"bypassing dict..."});
-                        // Get時は 'edt' プロパティ自体を消すのが Error(2) 回避のコツ
-                        const props = [{ 'epc': epc_num }]; 
-                        el.send(address, [0x05, 0xFF, 0x01], deoj, 0x62, props, (errRaw, resRaw) => {
-                            handleResponse(errRaw, resRaw, "raw-get");
-                        });
-                    } else {
-                        handleResponse(err, res, "get");
-                    }
-                });
-            }
+            });
         });
         node.on('close', function() { if (el) el.close(); });
     }
