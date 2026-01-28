@@ -1,65 +1,72 @@
-var dgram = require("dgram");
+module.exports = function(RED) {
+    "use strict";
+    const echonet = require('node-echonet-lite');
 
-module.exports = function (RED) {
-  var EchonetLite = require("node-echonet-lite");
-  var el = new EchonetLite({ type: "lan" });
+    function EchonetLiteNode(n) {
+        RED.nodes.createNode(this, n);
+        this.ip = n.ip;
+        const node = this;
 
-  function EchonetLiteNode(config) {
-    RED.nodes.createNode(this, config);
-    var node = this;
-    node.location = config.location;
+        // ECHONET Lite インスタンスの生成（管理ソフト/HEMSクラス 05FF01 を名乗る）
+        const el = new echonet({ 'lang': 'ja', 'type': 'lan' });
 
-    el.init((err) => {
-      node.status(err ? { fill: "red", shape: "ring", text: "Error" } : { fill: "green", shape: "dot", text: "Ready" });
-    });
+        node.on('input', function(msg) {
+            const address = msg.ip || node.ip;
+            if (!address) {
+                node.error("IP Address is required.");
+                return;
+            }
 
-    node.on("input", function (msg) {
-      var address = node.location || msg.ip || (msg.payload && msg.payload.ip);
-      if (!address) return;
+            // --- 入力値のパース（すべて16進数として処理） ---
+            // DEOJ (Destination Object): デフォルトは蓄電池 027D01
+            const deoj = msg.object || [0x02, 0x7D, 0x01];
+            
+            // EPC (Property Code): 文字列を数値に変換 ("E0" -> 0xE0)
+            const epc = parseInt(msg.epc, 16);
+            
+            // EDT (Data): 書き込み値がある場合は配列に変換、なければ null (GET)
+            let edt = null;
+            let esv = 0x62; // GET (Get)
 
-      var deoj = msg.object || [0x02, 0x7D, 0x01]; // 蓄電池
-      var epc = parseInt(String(msg.epc || "DA").replace("0x", ""), 16);
+            if (msg.set_value !== undefined && msg.set_value !== null) {
+                esv = 0x61; // SET (SetC)
+                const hexStr = msg.set_value.toString();
+                edt = [];
+                for (let i = 0; i < hexStr.length; i += 2) {
+                    edt.push(parseInt(hexStr.substr(i, 2), 16));
+                }
+            }
 
-      // --- 書き込み (SET) ---
-      if (msg.set_value !== undefined) {
-        var edt = parseInt(String(msg.set_value).replace("0x", ""), 16);
-        
-        // 標準パケット構築 (SetC: 0x61)
-        var packet = Buffer.from([
-          0x10, 0x81, 0x00, 0x01, 
-          0x05, 0xFF, 0x01, // SEOJ: 管理装置
-          deoj[0], deoj[1], deoj[2], 
-          0x61, 0x01, epc, 0x01, edt
-        ]);
+            // プロパティ構造体の作成
+            const prop = { 'epc': epc, 'edt': edt };
 
-        var client = dgram.createSocket("udp4");
-        client.send(packet, 3610, address, (err) => {
-          node.status(err ? { fill: "red", shape: "dot", text: "Error" } : { fill: "green", shape: "dot", text: "Sent" });
-          setTimeout(() => { node.status({ fill: "green", shape: "dot", text: "Ready" }); }, 2000);
-          client.close();
-        });
+            // --- ライブラリの辞書をバイパスして直接送信する ---
+            // el.send(送信先, SEOJ, DEOJ, ESV, プロパティ配列, コールバック)
+            // SEOJ: 05FF01 (管理ソフトクラス)
+            el.send(address, [0x05, 0xFF, 0x01], deoj, esv, [prop], (err, res) => {
+                if (err) {
+                    node.error("ECHONET Lite Send Error: " + err.message);
+                    node.status({fill:"red", shape:"ring", text:"error"});
+                    return;
+                }
 
-        msg.payload = "OK";
-        node.send(msg);
-
-      } else {
-        // --- 読み取り (GET) ---
-        node.status({ fill: "yellow", shape: "dot", text: "Reading..." });
-        el.getPropertyValue(address, deoj, epc, (err, res) => {
-          var val = 0;
-          if (res && res.message && res.message.prop) {
-            res.message.prop.forEach(p => {
-              if (p.epc === epc && p.buffer) {
-                for (var i = 0; i < p.buffer.length; i++) { val = val * 256 + p.buffer[i]; }
-              }
+                // 受信データの処理
+                if (res && res.detail && res.detail.property && res.detail.property.length > 0) {
+                    const resultProp = res.detail.property[0];
+                    // 結果を16進数文字列で payload に格納
+                    msg.payload = Buffer.from(resultProp.edt).toString('hex').toUpperCase();
+                    
+                    node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
+                    node.send(msg);
+                }
             });
-          }
-          msg.payload = val;
-          node.send(msg);
-          node.status({ fill: "blue", shape: "dot", text: "Val: " + val });
         });
-      }
-    });
-  }
-  RED.nodes.registerType("echonet-lite", EchonetLiteNode, {});
+
+        // 終了処理
+        node.on('close', function() {
+            if (el) el.close();
+        });
+    }
+
+    RED.nodes.registerType("echonet-lite", EchonetLiteNode);
 };
