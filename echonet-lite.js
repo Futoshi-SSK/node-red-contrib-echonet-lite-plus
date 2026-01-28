@@ -15,62 +15,69 @@ module.exports = function(RED) {
                 return;
             }
 
-            // --- パケット要素の準備 ---
-            const tid = Math.floor(Math.random() * 65535); // トランザクションID
-            const seoj = [0x05, 0xFF, 0x01];              // 管理ソフトクラス
-            const deoj = msg.object || [0x02, 0x7D, 0x01]; // デフォルト蓄電池
-            const epc = parseInt(msg.epc, 16);             // プロパティ名
+            // --- ステータスを「送信中」にする ---
+            node.status({fill:"blue", shape:"dot", text:"waiting..."});
+
+            const tid = Math.floor(Math.random() * 65535);
+            const seoj = [0x05, 0xFF, 0x01];
+            const deoj = msg.object || [0x02, 0x7D, 0x01];
+            const epc = parseInt(msg.epc, 16);
             
-            let esv = 0x62; // Get (読み取り)
+            let esv = 0x62; // Get
             let edt = Buffer.alloc(0);
 
-            // 書き込み値がある場合
             if (msg.set_value !== undefined && msg.set_value !== null) {
-                esv = 0x61; // SetC (書き込み)
+                esv = 0x61; // SetC
                 edt = Buffer.from(msg.set_value.toString(), 'hex');
             }
 
-            // --- ECHONET Lite 電文（バイナリ）の組み立て ---
             const buf = Buffer.concat([
-                Buffer.from([0x10, 0x81]),           // EHD (ECHONET Lite ヘッダー)
-                Buffer.from([(tid >> 8) & 0xFF, tid & 0xFF]), // TID
-                Buffer.from(seoj),                   // SEOJ
-                Buffer.from(deoj),                   // DEOJ
-                Buffer.from([esv, 0x01, epc]),       // ESV, OPC (1), EPC
-                Buffer.from([edt.length]),           // PDC (データの長さ)
-                edt                                  // EDT
+                Buffer.from([0x10, 0x81]),
+                Buffer.from([(tid >> 8) & 0xFF, tid & 0xFF]),
+                Buffer.from(seoj),
+                Buffer.from(deoj),
+                Buffer.from([esv, 0x01, epc]),
+                Buffer.from([edt.length]),
+                edt
             ]);
 
-            // --- UDPで直接送信 ---
             const client = dgram.createSocket('udp4');
             
-            // 応答待ち受け（タイムアウト設定）
+            // タイムアウト処理（3秒経ったら強制終了して次に進む）
             const timeout = setTimeout(() => {
                 client.close();
-                node.status({fill:"yellow", shape:"ring", text:"timeout"});
+                node.status({fill:"red", shape:"ring", text:"timeout"});
+                // タイムアウトでもフローを止めないために空で送るかエラーを投げる
+                node.send(msg); 
             }, 3000);
 
             client.on('message', (response, rinfo) => {
-                // 自分宛の応答かチェック（TIDの照合）
+                // TIDの照合
                 if (response[2] === ((tid >> 8) & 0xFF) && response[3] === (tid & 0xFF)) {
                     clearTimeout(timeout);
                     client.close();
 
-                    // 応答ESVが正しければデータを抽出
-                    // (0x71: SetRes, 0x72: GetRes)
-                    if (response[10] === 0x71 || response[10] === 0x72) {
+                    const resESV = response[10];
+                    // 0x71: SetRes, 0x72: GetRes, 0x51/0x52: SNA(不可応答)
+                    if (resESV === 0x71 || resESV === 0x72) {
                         const pdc = response[13];
                         msg.payload = response.slice(14, 14 + pdc).toString('hex').toUpperCase();
                         node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
-                        node.send(msg);
+                    } else {
+                        msg.payload = null;
+                        node.status({fill:"red", shape:"ring", text:"SNA Error: " + resESV.toString(16)});
                     }
+                    // 後続のノード（音声合成など）へデータを送る
+                    node.send(msg);
                 }
             });
 
             client.send(buf, 0, buf.length, 3610, address, (err) => {
                 if (err) {
+                    clearTimeout(timeout);
                     node.error("UDP Send Error: " + err.message);
                     client.close();
+                    node.status({fill:"red", shape:"ring", text:"send error"});
                 }
             });
         });
