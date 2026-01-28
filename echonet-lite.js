@@ -4,32 +4,33 @@ module.exports = function(RED) {
 
     function EchonetLiteNode(n) {
         RED.nodes.createNode(this, n);
-        this.ip = n.ip;
+        
         const node = this;
+        // 【デバッグ用】受け取った設定値をすべてログに出力
+        node.warn("Debug - Config received from UI: " + JSON.stringify(n));
 
-        // ECHONET Lite インスタンスの生成（管理ソフト/HEMSクラス 05FF01 を名乗る）
+        // IPアドレスの判定（n.ip, n.host, n.address の順に試行）
+        this.ip = n.ip || n.host || n.address; 
+        
         const el = new echonet({ 'lang': 'ja', 'type': 'lan' });
 
         node.on('input', function(msg) {
             const address = msg.ip || node.ip;
+            
             if (!address) {
-                node.error("IP Address is required.");
+                // エラーメッセージに詳細を含める
+                node.error("IP Address is required. (n.ip:" + n.ip + ", n.host:" + n.host + ", n.address:" + n.address + ")");
+                node.status({fill:"red", shape:"ring", text:"IP missing"});
                 return;
             }
 
-            // --- 入力値のパース（すべて16進数として処理） ---
-            // DEOJ (Destination Object): デフォルトは蓄電池 027D01
             const deoj = msg.object || [0x02, 0x7D, 0x01];
-            
-            // EPC (Property Code): 文字列を数値に変換 ("E0" -> 0xE0)
             const epc = parseInt(msg.epc, 16);
-            
-            // EDT (Data): 書き込み値がある場合は配列に変換、なければ null (GET)
             let edt = null;
-            let esv = 0x62; // GET (Get)
+            let esv = 0x62;
 
             if (msg.set_value !== undefined && msg.set_value !== null) {
-                esv = 0x61; // SET (SetC)
+                esv = 0x61;
                 const hexStr = msg.set_value.toString();
                 edt = [];
                 for (let i = 0; i < hexStr.length; i += 2) {
@@ -37,12 +38,8 @@ module.exports = function(RED) {
                 }
             }
 
-            // プロパティ構造体の作成
             const prop = { 'epc': epc, 'edt': edt };
 
-            // --- ライブラリの辞書をバイパスして直接送信する ---
-            // el.send(送信先, SEOJ, DEOJ, ESV, プロパティ配列, コールバック)
-            // SEOJ: 05FF01 (管理ソフトクラス)
             el.send(address, [0x05, 0xFF, 0x01], deoj, esv, [prop], (err, res) => {
                 if (err) {
                     node.error("ECHONET Lite Send Error: " + err.message);
@@ -50,19 +47,15 @@ module.exports = function(RED) {
                     return;
                 }
 
-                // 受信データの処理
                 if (res && res.detail && res.detail.property && res.detail.property.length > 0) {
                     const resultProp = res.detail.property[0];
-                    // 結果を16進数文字列で payload に格納
                     msg.payload = Buffer.from(resultProp.edt).toString('hex').toUpperCase();
-                    
                     node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
                     node.send(msg);
                 }
             });
         });
 
-        // 終了処理
         node.on('close', function() {
             if (el) el.close();
         });
