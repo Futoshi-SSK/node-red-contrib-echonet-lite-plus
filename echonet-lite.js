@@ -4,13 +4,10 @@ module.exports = function(RED) {
 
     function EchonetLiteNode(n) {
         RED.nodes.createNode(this, n);
-        
         const node = this;
-        // 【デバッグ用】受け取った設定値をすべてログに出力
-        node.warn("Debug - Config received from UI: " + JSON.stringify(n));
 
-        // IPアドレスの判定（n.ip, n.host, n.address の順に試行）
-        this.ip = n.ip || n.host || n.address; 
+        // 設定からIPアドレスを特定（locationを優先候補に追加）
+        this.ip = n.ip || n.host || n.address || n.location; 
         
         const el = new echonet({ 'lang': 'ja', 'type': 'lan' });
 
@@ -18,8 +15,7 @@ module.exports = function(RED) {
             const address = msg.ip || node.ip;
             
             if (!address) {
-                // エラーメッセージに詳細を含める
-                node.error("IP Address is required. (n.ip:" + n.ip + ", n.host:" + n.host + ", n.address:" + n.address + ")");
+                node.error("IP Address is required. (n.location: " + n.location + ")");
                 node.status({fill:"red", shape:"ring", text:"IP missing"});
                 return;
             }
