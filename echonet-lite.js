@@ -10,38 +10,45 @@ module.exports = function(RED) {
 
         node.on('input', function(msg) {
             const address = msg.ip || node.ip;
-            const deoj = msg.object || [0x02, 0x7D, 0x01]; // デフォルト蓄電池クラス
+            const deoj = msg.object || [0x02, 0x7D, 0x01]; // デフォルト蓄電池
             const epc_num = parseInt(msg.epc || "E2", 16);
 
             node.status({fill:"blue", shape:"dot", text:"sending..."});
 
             let esv = 0x62; // Get (取得)
-            let props = [{ 'epc': epc_num }]; // Get時は 'edt' キーを含めない
+            // 重要：ライブラリの create メソッドをパスするため、Getでも空の Buffer を入れる
+            let edt = Buffer.alloc(0); 
 
             if (msg.set_value !== undefined && msg.set_value !== null) {
                 esv = 0x61; // SetC (書き込み)
-                props[0].edt = Buffer.from(msg.set_value.toString(), 'hex');
+                edt = Buffer.from(msg.set_value.toString(), 'hex');
             }
 
-            // 辞書チェックをバイパスするため el.send に一本化
-            el.send(address, [0x05, 0xFF, 0x01], deoj, esv, props, (err, res) => {
-                if (err) {
-                    node.status({fill:"red", shape:"ring", text:"comm error"});
-                    msg.payload = "TIMEOUT_ERROR";
-                } else {
-                    try {
-                        // レスポンスから EDT を直接抽出
-                        const rawData = res.detail.property[0].edt;
-                        msg.payload = Buffer.from(rawData).toString('hex').toUpperCase();
-                        node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
-                    } catch (e) {
-                        // Set時など応答データがない場合のフォールバック
-                        msg.payload = "SUCCESS"; 
-                        node.status({fill:"green", shape:"dot", text:"OK"});
+            const props = [{ 'epc': epc_num, 'edt': edt }];
+
+            // 同期的な例外（Error 2）で Node-RED ごと落ちるのを防ぐための try-catch
+            try {
+                el.send(address, [0x05, 0xFF, 0x01], deoj, esv, props, (err, res) => {
+                    if (err) {
+                        node.status({fill:"red", shape:"ring", text:"timeout"});
+                        msg.payload = "TIMEOUT_ERROR";
+                    } else {
+                        try {
+                            // レスポンスから EDT を抽出
+                            const rawData = res.detail.property[0].edt;
+                            msg.payload = Buffer.from(rawData).toString('hex').toUpperCase();
+                            node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
+                        } catch (e) {
+                            msg.payload = "SUCCESS"; 
+                            node.status({fill:"green", shape:"dot", text:"OK"});
+                        }
                     }
-                }
-                node.send(msg);
-            });
+                    node.send(msg);
+                });
+            } catch (fatalError) {
+                node.error("Library Fatal Error (2): " + fatalError.message);
+                node.status({fill:"red", shape:"dot", text:"crash prevented"});
+            }
         });
         node.on('close', function() { if (el) el.close(); });
     }
