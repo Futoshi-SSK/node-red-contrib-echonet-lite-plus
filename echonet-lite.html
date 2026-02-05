@@ -1,28 +1,72 @@
-<!-- register echonet-lite node -->
 <script type="text/javascript">
     RED.nodes.registerType('echonet-lite', {
         category: 'Echonet Lite',
         color: '#66c7f4',
         defaults: {
             name: { value: "" },
-            location: { value: "" }
+            location: { value: "" }, // 既存のIP/ホスト用
+            transport: { value: "udp" },
+            serialPort: { value: "/dev/ttyUSB0" },
+            ipv6: { value: "" },
+            object: { value: "028801" }, // スマートメーターのデフォルト
+            epc: { value: "E7" }         // 瞬時電力のデフォルト
         },
         inputs: 1,
         outputs: 1,
-        icon: "font-awesome/fa-info",
+        icon: "font-awesome/fa-bolt", // 電力っぽく雷マークに変更（お好みで）
         label: function () {
-            return this.name || "echonet-lite";
+            return this.name || (this.transport === 'broute' ? "B-Route" : "echonet-lite");
+        },
+        oneditprepare: function() {
+            // 通信方式の選択によって表示を切り替える
+            $("#node-input-transport").on("change", function() {
+                if ($(this).val() === "udp") {
+                    $(".row-udp").show();
+                    $(".row-broute").hide();
+                } else {
+                    $(".row-udp").hide();
+                    $(".row-broute").show();
+                }
+            });
         }
     });
 </script>
-<!-- Define setting UI for echonet-lite node -->
+
 <script type="text/html" data-template-name="echonet-lite">
     <div class="form-row">
-        <label><i class="fa fa-tag"></i> Name: </label>
-        <input type="text" id="node-input-name"/>
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name: </label>
+        <input type="text" id="node-input-name" placeholder="My Meter"/>
+    </div>
+    
+    <div class="form-row">
+        <label for="node-input-transport"><i class="fa fa-exchange"></i> Transport: </label>
+        <select id="node-input-transport">
+            <option value="udp">UDP (LAN)</option>
+            <option value="broute">B-Route (Wi-SUN)</option>
+        </select>
+    </div>
+
+    <div class="form-row row-udp">
+        <label for="node-input-location"><i class="fa fa-globe"></i> Location: </label>
+        <input type="text" id="node-input-location" placeholder="192.168.x.x"/>
+    </div>
+
+    <div class="form-row row-broute">
+        <label for="node-input-serialPort"><i class="fa fa-usb"></i> Serial Port: </label>
+        <input type="text" id="node-input-serialPort" placeholder="/dev/ttyUSB0"/>
+    </div>
+    <div class="form-row row-broute">
+        <label for="node-input-ipv6"><i class="fa fa-map-marker"></i> Meter IPv6: </label>
+        <input type="text" id="node-input-ipv6" placeholder="FE80:0000:0000:0000:..."/>
+    </div>
+
+    <hr>
+    <div class="form-row">
+        <label for="node-input-object"><i class="fa fa-cube"></i> Object ID: </label>
+        <input type="text" id="node-input-object" placeholder="028801"/>
     </div>
     <div class="form-row">
-        <label><i class="fa fa-globe"></i> Location: </label>
-        <input type="text" id="node-input-location"/>
+        <label for="node-input-epc"><i class="fa fa-list"></i> EPC (HEX): </label>
+        <input type="text" id="node-input-epc" placeholder="E7"/>
     </div>
 </script>
