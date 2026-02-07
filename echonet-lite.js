@@ -1,171 +1,81 @@
-/*
- * ECHONET Lite Node for Node-RED
- * Version 3.0.0 - Multi-Transport (UDP & B-Route) Implementation
- */
-const dgram = require('dgram');
-let SerialPort;
-try {
-    SerialPort = require('serialport').SerialPort;
-} catch (e) {
-    // serialportがインストールされていない場合
-    SerialPort = null;
-}
-
 module.exports = function(RED) {
     "use strict";
+    const dgram = require("dgram");
+    let SerialPort;
+    try { SerialPort = require("serialport").SerialPort; } catch (e) { SerialPort = null; }
+    let sharedPort = null;
+    let serialBuffer = "";
 
-    function EchonetLiteNode(n) {
-        RED.nodes.createNode(this, n);
-        const node = this;
+    function EchonetLiteNode(config) {
+        RED.nodes.createNode(this, config);
+        var node = this;
+        node.transport = String(config.transport || "udp (lan)").toLowerCase();
+        node.serialPort = config.serialPort || "/dev/ttyUSB0";
+        node.location = config.location || "";
 
-        // 既存設定に transport がなければ "udp" に（デグレード防止）
-        this.transport = n.transport || "udp";
-        this.ip = n.location || n.ip;
-    
-        // 既存設定に object がなければ、以前のデフォルト（027D01 等）に
-        // これにより、既存の太陽光フローが突然スマートメーターを叩きに行くのを防ぎます
-        this.object = n.object || "027D01"; 
-    
-        this.serialPort = n.serialPort || "/dev/ttyUSB0";
-        this.ipv6 = n.ipv6;
-        this.epc = n.epc || "E7";
-        
-        node.on('input', function(msg) {
-            // 入力メッセージによる動的オーバーライド
-            const transport = msg.transport || node.transport;
-            const targetAddr = msg.ip || node.ip || msg.ipv6 || node.ipv6;
-            const epc_str = String(msg.epc || node.epc).trim().toUpperCase();
-            const epc_num = parseInt(epc_str, 16);
-            
-            // Object IDの処理 ([0x02, 0x88, 0x01] 形式に変換)
-            const obj_str = String(msg.object || node.object).trim();
-            const deoj = [
-                parseInt(obj_str.substr(0, 2), 16),
-                parseInt(obj_str.substr(2, 2), 16),
-                parseInt(obj_str.substr(4, 2), 16)
-            ];
+        const onLineReceived = (line) => {
+            node.send([{ payload: line, _raw: true }]);
+            node.status({fill:"blue", shape:"ring", text: "Data Received"});
+        };
 
-            let esv = 0x62, edt = [];
-            const original_set_value = msg.set_value;
+        if (node.transport.includes("b-route")) { RED.events.on("wisun-data", onLineReceived); }
 
-            // Set命令の判定
-            if (original_set_value !== undefined && original_set_value !== null && String(original_set_value).trim() !== "") {
-                esv = 0x61;
-                const hexData = String(original_set_value).trim();
-                for (let i = 0; i < hexData.length; i += 2) { 
-                    edt.push(parseInt(hexData.substr(i, 2), 16)); 
-                }
-            }
+        node.on("input", (msg) => {
+            const tid = Math.floor(Math.random() * 65535);
+            const deoj = Array.isArray(msg.object) ? msg.object : [0x02, 0x88, 0x01];
+            const epcVal = parseInt(String(msg.epc || "E7").replace("0x", ""), 16) || 0xE7;
+            const elFrame = Buffer.from([0x10, 0x81, (tid>>8)&0xFF, tid&0xFF, 0x05, 0xFF, 0x01, deoj[0], deoj[1], deoj[2], 0x62, 0x01, epcVal, 0x00]);
 
-            // TID生成とパケット構築（ここは共通）
-            const tid_val = Math.floor(Math.random() * 65535);
-            const tid = [ (tid_val >> 8) & 0xFF, tid_val & 0xFF ];
-            const packet = Buffer.from([
-                0x10, 0x81, tid[0], tid[1], 
-                0x05, 0xFD, 0x01, 
-                deoj[0], deoj[1], deoj[2], 
-                esv, 0x01, epc_num, edt.length, ...edt
-            ]);
-
-            // --- 送信処理の分岐 ---
-            if (transport === "udp") {
-                executeUdp(node, msg, packet, targetAddr, tid);
-            } else if (transport === "broute") {
-                if (!SerialPort) {
-                    node.error("SerialPort library is missing.");
-                    return;
-                }
-                executeBRoute(node, msg, packet, targetAddr, tid);
-            }
-        });
-    }
-
-    // --- UDP送信ロジック ---
-    function executeUdp(node, msg, packet, address, tid) {
-        const client = dgram.createSocket('udp4');
-        const timeout = setTimeout(() => {
-            try { client.close(); } catch(e) {}
-            node.status({fill:"red", shape:"ring", text:"UDP timeout"});
-            msg.payload = "TIMEOUT_ERROR";
-            node.send(msg);
-        }, 7000);
-
-        client.on('message', (remoteMsg) => {
-            if (remoteMsg[2] === tid[0] && remoteMsg[3] === tid[1]) {
-                clearTimeout(timeout);
-                try { client.close(); } catch(e) {}
-                parseEchonetResult(node, msg, remoteMsg);
-            }
-        });
-
-        client.bind(0, () => {
-            client.send(packet, 0, packet.length, 3610, address);
-        });
-    }
-
-    // --- B-Route(Serial)送信ロジック ---
-    function executeBRoute(node, msg, packet, ipv6, tid) {
-        const port = new SerialPort({ path: node.serialPort, baudRate: 115200 });
-        let serialBuffer = "";
-
-        const timeout = setTimeout(() => {
-            if (port.isOpen) port.close();
-            node.status({fill:"red", shape:"ring", text:"B-Route timeout"});
-            msg.payload = "TIMEOUT_ERROR";
-            node.send(msg);
-        }, 10000);
-
-        port.on('open', () => {
-            // ECHONET LiteパケットをSKSENDTOコマンドでラップ
-            const dataLen = packet.length.toString(16).toUpperCase().padStart(4, '0');
-            const command = `SKSENDTO 1 ${ipv6} 0E1A 1 ${dataLen} `;
-            
-            port.write(command); // コマンド文字列
-            port.write(packet);  // バイナリ電文
-            port.write("\r\n");  // 終端
-        });
-
-        port.on('data', (data) => {
-            serialBuffer += data.toString();
-            // ERXUDP <SENDER> <DEST> <RPORT> <LPORT> <SADDR> <SIDE> <LEN> <DATA>
-            if (serialBuffer.includes("ERXUDP")) {
-                const lines = serialBuffer.split("\r\n");
-                const erxLine = lines.find(l => l.startsWith("ERXUDP"));
-                if (erxLine) {
-                    const parts = erxLine.split(" ");
-                    if (parts.length >= 9) {
-                        const resBinary = Buffer.from(parts[8].trim(), 'hex');
-                        // TIDの照合
-                        if (resBinary[2] === tid[0] && resBinary[3] === tid[1]) {
-                            clearTimeout(timeout);
-                            port.close();
-                            parseEchonetResult(node, msg, resBinary);
-                        }
+            if (node.transport.includes("udp")) {
+                const client = dgram.createSocket({ type: "udp4", reuseAddr: true });
+                client.on("message", (res) => {
+                    if (res[2] === elFrame[2] && res[3] === elFrame[3]) {
+                        client.close();
+                        const hex = res.toString("hex").toUpperCase();
+                        let n1 = RED.util.cloneMessage(msg); let n2 = RED.util.cloneMessage(msg);
+                        n1.payload = hex; n2.payload = hex.slice(28); n2.epc = hex.slice(24, 26).toUpperCase();
+                        node.send([n1, n2]);
                     }
-                }
+                });
+                client.bind(3610, () => client.send(elFrame, 0, elFrame.length, 3610, node.location));
+                return;
+            }
+
+            if (node.transport.includes("b-route")) {
+                const writeToSerial = () => {
+                    if (msg.epc) {
+                        const header = `SKSENDTO 1 ${node.location} 0E1A 1 0 000E `;
+                        sharedPort.write(header);
+                        setTimeout(() => {
+                            sharedPort.write(elFrame, () => {
+                                if (typeof sharedPort.drain === "function") sharedPort.drain();
+                                node.status({fill:"magenta", shape:"dot", text:"Binary Sent"});
+                            });
+                        }, 50);
+                    } else {
+                        sharedPort.write(String(msg.payload || "").trim() + "\r\n");
+                    }
+                };
+                if (!sharedPort || !sharedPort.isOpen) {
+                    sharedPort = new SerialPort({ path: node.serialPort, baudRate: 115200 }, () => {
+                        sharedPort.on("data", (data) => {
+                            // latin1を使用してバイナリを破壊から守る
+                            serialBuffer += data.toString("latin1");
+                            const lines = serialBuffer.split(/\r?\n/);
+                            if (lines.length > 1) {
+                                serialBuffer = lines.pop();
+                                lines.forEach(line => { if (line.trim()) RED.events.emit("wisun-data", line.trim()); });
+                            }
+                        });
+                        setTimeout(writeToSerial, 500);
+                    });
+                } else { writeToSerial(); }
             }
         });
-
-        port.on('error', (err) => {
-            node.error("Serial Port Error: " + err.message);
-            if (port.isOpen) port.close();
+        node.on("close", (done) => {
+            RED.events.removeListener("wisun-data", onLineReceived);
+            done();
         });
     }
-
-    // --- 共通パースロジック ---
-    function parseEchonetResult(node, msg, remoteMsg) {
-        const res_esv = remoteMsg[10];
-        const pdc = remoteMsg[13];
-        const res_edt = remoteMsg.slice(14, 14 + pdc);
-        
-        if (res_esv === 0x71 && pdc === 0) {
-            msg.payload = "SET_OK";
-        } else {
-            msg.payload = res_edt.toString('hex').toUpperCase();
-        }
-        node.status({fill:"green", shape:"dot", text:"OK: " + msg.payload});
-        node.send(msg);
-    }
-
     RED.nodes.registerType("echonet-lite", EchonetLiteNode);
 };
