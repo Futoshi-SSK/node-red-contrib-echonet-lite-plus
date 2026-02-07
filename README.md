@@ -2,13 +2,13 @@ node-red-contrib-echonet-lite-plus
 
 An ECHONET Lite controller for Node-RED, designed to bypass common library limitations over smart home devices.
 
-
 Features
 
 Dictionary-Free Control: Unlike standard libraries that restrict you to pre-defined property codes, this version allows you to send any EPC (Property Code) and EDT (Data) directly. This is essential for controlling manufacturer-specific or undocumented properties.
 
 High Compatibility (SEOJ: 05FF01): The Source Object ID is fixed to 05FF01 (Management Software/HEMS), which ensures higher acceptance rates from security-strict devices like storage batteries and large appliances.
 
+B-Route Access: Data acquisition from energy meters using Wi-SUN protocol.
 
 Installation
 
@@ -27,4 +27,8 @@ To write a value, set msg.set_value in your flow.
 
 Read Operation (GET)
 To read a value, simply omit msg.set_value. The node will return the parsed value in msg.payload.
+
+B-Route only: You can use msg.payload instead of msg.object and msg.epc to directly send messages to your Wi-SUN adapter, like "SKSCAN 2 FFFFFFFF 6 0". Array is also valid for msg.payload, like {id: "xxx", pwd: "***"}
+
+
 
