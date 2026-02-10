@@ -24,7 +24,27 @@ module.exports = function(RED) {
             const tid = Math.floor(Math.random() * 65535);
             const deoj = Array.isArray(msg.object) ? msg.object : [0x02, 0x88, 0x01];
             const epcVal = parseInt(String(msg.epc || "E7").replace("0x", ""), 16) || 0xE7;
-            const elFrame = Buffer.from([0x10, 0x81, (tid>>8)&0xFF, tid&0xFF, 0x05, 0xFF, 0x01, deoj[0], deoj[1], deoj[2], 0x62, 0x01, epcVal, 0x00]);
+
+            let esv = 0x62; // デフォルトは Get (0x62)
+            let edt = Buffer.alloc(0);
+            
+            // msg.set_value が存在する場合のみ書き込み(SetC: 0x61)として動作
+            if (msg.set_value !== undefined && msg.set_value !== null && msg.set_value !== "") {
+                esv = 0x61; 
+                let val = msg.set_value;
+                if (typeof val === "string") {
+                    edt = Buffer.from(val, "hex");
+                } else if (typeof val === "number") {
+                    edt = Buffer.from([val]);
+                } else if (Buffer.isBuffer(val)) {
+                    edt = val;
+                }
+            }
+
+            const elFrame = Buffer.concat([
+                Buffer.from([0x10, 0x81, (tid>>8)&0xFF, tid&0xFF, 0x05, 0xFF, 0x01, deoj[0], deoj[1], deoj[2], esv, 0x01, epcVal, edt.length]),
+                edt
+            ]);
 
             if (node.transport.includes("udp")) {
                 const client = dgram.createSocket({ type: "udp4", reuseAddr: true });
@@ -59,7 +79,6 @@ module.exports = function(RED) {
                 if (!sharedPort || !sharedPort.isOpen) {
                     sharedPort = new SerialPort({ path: node.serialPort, baudRate: 115200 }, () => {
                         sharedPort.on("data", (data) => {
-                            // latin1を使用してバイナリを破壊から守る
                             serialBuffer += data.toString("latin1");
                             const lines = serialBuffer.split(/\r?\n/);
                             if (lines.length > 1) {
