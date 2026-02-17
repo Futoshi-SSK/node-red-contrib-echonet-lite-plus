@@ -80,7 +80,7 @@ module.exports = function(RED) {
                     sharedPort = new SerialPort({ path: node.serialPort, baudRate: 115200 }, () => {
                         sharedPort.on("data", (data) => {
                             serialBuffer += data.toString("latin1");
-                            const lines = serialBuffer.split(/\r?\n/);
+                            const lines = serialBuffer.split("\r\n");
                             if (lines.length > 1) {
                                 serialBuffer = lines.pop();
                                 lines.forEach(line => { if (line.trim()) RED.events.emit("wisun-data", line.trim()); });
