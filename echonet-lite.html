@@ -5,7 +5,7 @@
         defaults: {
             name: { value: "" },
             location: { value: "" }, // 既存のIP/ホスト用
-            transport: { value: "udp" },
+            transport: { value: "udp (lan)" },
             serialPort: { value: "/dev/ttyUSB0" },
             ipv6: { value: "" },
             object: { value: "028801" }, // スマートメーターのデフォルト
@@ -15,12 +15,12 @@
         outputs: 1,
         icon: "font-awesome/fa-bolt", // 電力っぽく雷マークに変更（お好みで）
         label: function () {
-            return this.name || (this.transport === 'broute' ? "B-Route" : "echonet-lite");
+            return this.name || (this.transport === 'b-route' ? "B-Route" : "echonet-lite");
         },
         oneditprepare: function() {
             // 通信方式の選択によって表示を切り替える
             $("#node-input-transport").on("change", function() {
-                if ($(this).val() === "udp") {
+                if ($(this).val() === "udp (lan)") {
                     $(".row-udp").show();
                     $(".row-broute").hide();
                 } else {
@@ -28,6 +28,8 @@
                     $(".row-broute").show();
                 }
             });
+            // 初期表示を現在の設定値で初期化
+            $("#node-input-transport").trigger("change");
         }
     });
 </script>
@@ -41,8 +43,8 @@
     <div class="form-row">
         <label for="node-input-transport"><i class="fa fa-exchange"></i> Transport: </label>
         <select id="node-input-transport">
-            <option value="udp">UDP (LAN)</option>
-            <option value="broute">B-Route (Wi-SUN)</option>
+            <option value="udp (lan)">UDP (LAN)</option>
+            <option value="b-route">B-Route (Wi-SUN)</option>
         </select>
     </div>
 

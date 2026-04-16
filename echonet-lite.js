@@ -52,9 +52,10 @@ module.exports = function(RED) {
                     if (res[2] === elFrame[2] && res[3] === elFrame[3]) {
                         client.close();
                         const hex = res.toString("hex").toUpperCase();
-                        let n1 = RED.util.cloneMessage(msg); let n2 = RED.util.cloneMessage(msg);
-                        n1.payload = hex; n2.payload = hex.slice(28); n2.epc = hex.slice(24, 26).toUpperCase();
-                        node.send([n1, n2]);
+                        let n1 = RED.util.cloneMessage(msg);
+                        n1.payload = hex.slice(28);
+                        n1.epc = hex.slice(24, 26).toUpperCase();
+                        node.send([n1]);
                     }
                 });
                 client.bind(3610, () => client.send(elFrame, 0, elFrame.length, 3610, node.location));
