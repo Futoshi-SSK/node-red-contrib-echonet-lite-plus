@@ -67,6 +67,30 @@ To write a value, add `msg.set_value` to the message:
 | `msg.epc` | Property Code in hex string | `"DA"` |
 | `msg.set_value` | Value to write (hex string or number) | `"46"` (green mode) |
 
+### Multi-Property Operations (OPC>1)
+
+ECHONET Lite frames can carry more than one property per request. This node supports it generically (no per-vendor or per-property assumptions):
+
+**Multi-GET** — set `msg.epc` to an array of property codes:
+```javascript
+msg.object = [2, 125, 1];
+msg.epc = ["DA", "F2", "F4"];
+```
+Output: `msg.payload = {"DA": "46", "F2": "00", "F4": "..."}` — an object map of EPC → EDT hex string. `msg.epc` is not set on multi-property output.
+
+**Multi-SetC** — set `msg.set_value` to a plain object mapping EPC → value (same accepted value types as single SetC: hex string, number, or Buffer). `msg.epc` is ignored in this mode:
+```javascript
+msg.object = [2, 125, 1];
+msg.set_value = { "DA": "46", "F2": 0 };
+```
+On success, `msg.payload` is an object map of EPC → EDT (typically empty strings, since `Set_Res` normally echoes `PDC=0`).
+
+If any property in a multi-property request fails (`Get_SNA` / `Set_SNA`), the entire frame is treated as failed and retried — partial success is not extracted from a mixed response.
+
+### Error Handling (UDP)
+
+UDP requests (single- or multi-property) time out after **2 seconds** and retry up to **3 attempts** if no response is received, reusing the same TID. The socket is always closed when the request settles (success, exhausted retries, or socket error) to avoid leaking open sockets. If all attempts fail, the node calls `node.error()` (catchable with a Catch node). Node status reflects the current state: green = success, yellow = retrying, red = timeout/error.
+
 ### B-Route: Raw Serial Commands
 
 In B-Route mode, you can send raw SKSTACK-IP commands by omitting `msg.epc` and setting `msg.payload` to the command string:
@@ -92,6 +116,12 @@ The node output in B-Route mode passes through all raw serial lines received fro
 ```
 
 ## Changelog
+
+### v4.0.5
+- **Feature:** Generic multi-property support using ECHONET Lite's `OPC > 1`. Set `msg.epc` to an array to GET multiple properties in one frame; set `msg.set_value` to a plain object (EPC → value map) to SetC multiple properties in one frame. Response `msg.payload` is an object map (`{"DA":"46","F2":"00"}`). Existing single-property mode is fully unchanged and backward compatible.
+
+### v4.0.4
+- **Fix:** UDP requests now time out (2s) and retry (up to 3 attempts) instead of hanging indefinitely when no response arrives. The socket is always closed on completion (success, timeout, or socket error), preventing socket/port leaks on the shared local port 3610. Final failure raises `node.error()` so it can be caught by a Catch node. Node status now reflects success/retry/failure.
 
 ### v4.0.3
 - **Fix:** UDP output now correctly emits EDT only (`hex.slice(28)`) instead of the full ECHONET Lite frame. `msg.epc` is also set on the output message.
