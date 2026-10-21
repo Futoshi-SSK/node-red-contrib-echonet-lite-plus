@@ -1,10 +1,61 @@
 module.exports = function(RED) {
     "use strict";
     const dgram = require("dgram");
+    const net = require("net");
     let SerialPort;
     try { SerialPort = require("serialport").SerialPort; } catch (e) { SerialPort = null; }
-    let sharedPort = null;
+    let sharedSocket = null;
+    let socketConnected = false;
+    let reconnectTimer = null;
     let serialBuffer = "";
+
+    function ensureBrouteConnection(host, port) {
+        if (sharedSocket && (socketConnected || sharedSocket.connecting)) {
+            return;
+        }
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        const sock = new net.Socket();
+        sharedSocket = sock;
+        socketConnected = false;
+
+        sock.on("connect", () => {
+            socketConnected = true;
+            serialBuffer = "";
+            RED.events.emit("wisun-status", { connected: true });
+        });
+
+        sock.on("data", (data) => {
+            serialBuffer += data.toString("latin1");
+            const lines = serialBuffer.split("\r\n");
+            if (lines.length > 1) {
+                serialBuffer = lines.pop();
+                lines.forEach(line => {
+                    if (line.length > 0) RED.events.emit("wisun-data", line);
+                });
+            }
+        });
+
+        sock.on("error", () => {
+            // close イベントで再接続スケジュールされるため無視
+        });
+
+        sock.on("close", () => {
+            socketConnected = false;
+            if (sharedSocket === sock) {
+                sharedSocket = null;
+                RED.events.emit("wisun-status", { connected: false });
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    ensureBrouteConnection(host, port);
+                }, 3000);
+            }
+        });
+
+        sock.connect(port, host);
+    }
 
     function EchonetLiteNode(config) {
         RED.nodes.createNode(this, config);
@@ -13,12 +64,27 @@ module.exports = function(RED) {
         node.serialPort = config.serialPort || "/dev/ttyUSB0";
         node.location = config.location || "";
 
+        const BROUTE_HOST = process.env.BROUTE_TCP_HOST || "127.0.0.1";
+        const BROUTE_PORT = parseInt(process.env.BROUTE_TCP_PORT || "13610", 10);
+
         const onLineReceived = (line) => {
             node.send([{ payload: line, _raw: true }]);
             node.status({fill:"blue", shape:"ring", text: "Data Received"});
         };
 
-        if (node.transport.includes("b-route")) { RED.events.on("wisun-data", onLineReceived); }
+        const onStatusChanged = (st) => {
+            if (st && st.connected) {
+                node.status({fill:"green", shape:"dot", text: "Daemon Connected"});
+            } else {
+                node.status({fill:"yellow", shape:"ring", text: "Daemon Reconnecting"});
+            }
+        };
+
+        if (node.transport.includes("b-route")) {
+            RED.events.on("wisun-data", onLineReceived);
+            RED.events.on("wisun-status", onStatusChanged);
+            ensureBrouteConnection(BROUTE_HOST, BROUTE_PORT);
+        }
 
         node.on("input", (msg) => {
             const tid = Math.floor(Math.random() * 65535);
@@ -214,37 +280,32 @@ module.exports = function(RED) {
             }
 
             if (node.transport.includes("b-route")) {
-                const writeToSerial = () => {
+                ensureBrouteConnection(BROUTE_HOST, BROUTE_PORT);
+                const writeToDaemon = () => {
+                    if (!sharedSocket || !socketConnected) {
+                        node.status({fill:"yellow", shape:"ring", text:"Daemon Not Ready"});
+                        return;
+                    }
                     if (msg.epc) {
                         const header = `SKSENDTO 1 ${node.location} 0E1A 1 0 000E `;
-                        sharedPort.write(header);
-                        setTimeout(() => {
-                            sharedPort.write(elFrame, () => {
-                                if (typeof sharedPort.drain === "function") sharedPort.drain();
-                                node.status({fill:"magenta", shape:"dot", text:"Binary Sent"});
-                            });
-                        }, 50);
+                        const packet = Buffer.concat([Buffer.from(header, "latin1"), elFrame]);
+                        sharedSocket.write(packet, () => {
+                            node.status({fill:"magenta", shape:"dot", text:"Binary Sent"});
+                        });
                     } else {
-                        sharedPort.write(String(msg.payload || "").trim() + "\r\n");
+                        sharedSocket.write(String(msg.payload || "").trim() + "\r\n");
                     }
                 };
-                if (!sharedPort || !sharedPort.isOpen) {
-                    sharedPort = new SerialPort({ path: node.serialPort, baudRate: 115200 }, () => {
-                        sharedPort.on("data", (data) => {
-                            serialBuffer += data.toString("latin1");
-                            const lines = serialBuffer.split("\r\n");
-                            if (lines.length > 1) {
-                                serialBuffer = lines.pop();
-                                lines.forEach(line => { if (line.trim()) RED.events.emit("wisun-data", line.trim()); });
-                            }
-                        });
-                        setTimeout(writeToSerial, 500);
-                    });
-                } else { writeToSerial(); }
+                if (!socketConnected) {
+                    setTimeout(writeToDaemon, 300);
+                } else {
+                    writeToDaemon();
+                }
             }
         });
         node.on("close", (done) => {
             RED.events.removeListener("wisun-data", onLineReceived);
+            RED.events.removeListener("wisun-status", onStatusChanged);
             done();
         });
     }
